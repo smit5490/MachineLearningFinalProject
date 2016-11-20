@@ -1,0 +1,103 @@
+---
+title: "Machine Learning Capstone Project: Human Activity Recognition"
+output: html_document
+---
+###Introduction
+This is the final course project repository for Coursera's Machine Learning course by Johns Hopkins University. The Background provided for the project is provided below:
+
+"Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset)."
+
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. Thank you for your support.
+
+###Motivating Question
+The goal of this project is to predict the manner in which participants did the exercise based on any/all relevant measurements. This is the "classe" variable in the training set. 
+
+This report describes how the model was built, how cross validation was used, and a calculation of the out-of-sample error. The final prediction model will be used to predict 20 different test cases.
+
+###Read Test & Training Data
+```{r, echo=TRUE}
+training<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",na.strings=c("NA","#DIV/0!",""))
+testing<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",na.strings=c("NA","#DIV/0!",""))
+```
+
+###Pre-Process Data
+Load the necessary libraries and set seed for sample reporducibility
+```{r,echo=TRUE}
+library(caret);library(dplyr);library(rattle)
+set.seed(22071)
+```
+Partition data into a test and training set and clean the data
+```{r,echo=TRUE}
+inTrain<-createDataPartition(training$classe, p=0.7, list=FALSE)
+
+#Remove index variable in first column
+train_set <- training[inTrain,-c(1)]
+test_set <- training[-inTrain,-c(1)]
+
+#Remove variables with near zero variance:
+nzv_data<-nearZeroVar(train_set)
+train_set<-train_set[,-nzv_data]
+test_set<-test_set[,-nzv_data]
+
+#Remove variables with less than 75% of their values populated:
+na_count <-sapply(train_set, function(y) sum((is.na(y))))
+na_count<-data.frame(na_count)
+na_count$Variable<-rownames(na_count)
+na_count$Total<-nrow(train_set)
+na_count<-mutate(na_count,Percent_NA=na_count/Total)
+na_count<-filter(na_count,Percent_NA<0.25)
+final_variables<-na_count[,"Variable"]
+train_set<-train_set[,final_variables]
+test_set<-test_set[,final_variables]
+```
+Note that the variables removed had >95% of their data missing.
+
+###Predict Outcome using a Classification and Regression Tree Model
+The macine learning algorithm used is the "rpart" CART method in the caret package. Bootstrapping and 10-fold cross validation have both been evaluated to have identical accuracy. Cross validation is shown below.
+```{r,echo=TRUE}
+#Modify Control Parameters to use of 10-Fold cross-validation
+mod_Control<-trainControl(method="cv",number=10,allowParallel=FALSE)
+#Train CART model on train_set
+CART_model<-train(classe~.,data=train_set,method="rpart",trControl=mod_Control)
+#Predict values on test_set
+CART_pred<-predict(CART_model, newdata=test_set)
+#Assess out-of-sample error
+confusionMatrix(CART_pred, test_set$classe)
+#Plot final model
+fancyRpartPlot(CART_model$finalModel)
+```
+
+The decision tree model performs poorly on the test data, resulting in only a 56.65% accuracy. The out-of-sample error rate is 43.35%. Next, let's consider using a random forest of decision trees to increase prediction accuracy.
+
+###Predict Outcomes using a Random Forest Model
+The machine learning algorithm utilized is the default "rf" random forest method in the caret package. Due it's computational intensity, it is best to parallel process the trees and use 10-fold cross-validation.
+```{r,echo=TRUE}
+#Utilize parallel processing (credit to Len Greski for the assistance)
+library(parallel);library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+#Modify Control Parameters to allow parallel processing and use of 10-Fold cross-validation
+mod_Control<-trainControl(method="cv",number=10,allowParallel = TRUE)
+
+#Train random forest model and predict on test_set
+RF_model<-train(classe~.,data=train_set,method="rf",trControl=mod_Control)
+stopCluster(cluster)
+RF_pred<-predict(RF_model,newdata=test_set)
+
+#Assess prediction capability on test_set
+confusionMatrix(RF_pred,test_set$classe)
+```
+The use of a random forest algorithm vastly improved test set prediction accuracy to 99.98%. The out of sample error rate is 0.01%. 
+
+###Predict Outcomes of Testing Data using our Random Forest Model
+Using the model developed above, we can now predict the classe of the 20 test observations provided.
+```{r,echo=TRUE}
+predict(RF_model,newdata=testing)
+```
